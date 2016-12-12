@@ -1,0 +1,433 @@
+---
+title: "Assignment for the Regression Models Course on Coursera"
+author: "Anton Kovac"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: pdf_document
+---
+
+```{r Clean the working environment, echo = FALSE}
+rm(list = ls())
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, 
+                      comment = '', 
+                      message = FALSE, 
+                      warning = FALSE,
+                      fig.width = 7,
+                      fig.height = 6,
+                      fig.align = "center")
+```
+
+```{r library}
+library(UsingR, quietly = TRUE)
+library(dplyr, quietly = TRUE)
+library(tidyr, quietly = TRUE)
+```
+
+```{r Functions}
+tofactor <- function(x){
+    res <- as.factor(x)
+    res
+}
+
+Modus <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+descriptive <- function(dataset, variable, desc_type = 'mean') {
+    temp <- subset(dataset, select = variable)
+    if(desc_type == 'mean'){
+        return(mean(temp))
+    } else if(desc_type == 'sd'){
+        return(sd(temp))
+    } else if (desc_type == 'var'){
+        return(var(temp))
+    } else if (desc_type == 'modus'){
+        return(Modus(temp))
+    } else if (desc_type == 'median'){
+        return(median(temp))
+    } else if (desc_type == 'pocet'){
+        return(length(temp))
+    }
+}
+
+plot_hist <- function(x, tit = '', br = 12, xl = '', yl = '', borderColor = 'black', fillColor = 'magenta', ylimit){
+    hist(x = x, breaks = br, border = borderColor, col = fillColor, 
+         main = tit, xlab = xl, ylab = yl, ylim = ylimit, labels = TRUE)
+}
+
+plot_legend <- function(fit_obj){
+    rp = vector('expression',3)
+    rp[1] = substitute(expression(italic(R)^2 == r_2), 
+    		list(r_2 = format(summary(fit_obj)$r.squared, digits = 3 )))[2]
+    rp[2] = substitute(expression(italic(beta)[0] == intercept), 
+    		list(intercept = format(summary(fit_obj)$coef[1], digits = 3)))[2]
+    rp[3] = substitute(expression(italic(beta)[0] == slope), 
+    		list(slope = format(summary(fit_obj)$coef[2], digits = 3)))[2]
+    rp
+}
+
+plot_tran <- function(dat, group, y, tit, xl, yl, colors){
+    boxplot(y ~ group , data = dat, 
+            main = tit, 
+            xlab = xl,
+            ylab = yl)
+}
+```
+
+## Introduction
+
+This is the project work on coursera Regression Models course which is part of the Data Science specialization offered by John Hopkins University.[^1] This document does not include the code which was used to make the analysis. To see the source file (.Rmd) please visit [my github repository](https://github.com/Tonda-K/Data_Science_Specialization).
+According to the assignment I would explore data set of a collection of cars in `mpg` dataset. Specifically, my aim is to examine following questions:
+
+***
+> Is an automatic or manual transmission better for fuel economy represented by Miles per Gallon?
+> Quantify the Miles per Gallon difference between automatic and manual transmissions?
+
+***
+
+### 1. Exploration dataset
+
+```{r Load data - 1. look}
+data(mpg)
+mpg_df <- data.frame(mpg); rm(mpg)
+```
+
+```{r Data preprocessing}
+## Add new variable "power" which represents the power of the engine expressed by number of cylinders
+mpg_df$power <- ifelse(test = mpg_df$cyl >= 6, yes = 'high_power', no = 'low_power')
+
+## Add new variable "avg_consump" which represents average consumption computed as the average consumption of the cars in the city and highways 
+mpg_df <- mpg_df %>% mutate(avg_consump = (hwy + cty) / 2)
+
+
+factor_vars <- c(1, 2, 4, 5, 6, 7, 10, 11, 12)
+
+for (i in factor_vars){
+    mpg_df[ , i] <- tofactor(mpg_df[ , i])
+}
+
+mpg_df_sep <- mpg_df %>% 
+    separate(col = trans, into = c('trans_type', 'trans_model'), sep = '\\(')
+
+mpg_df_sep$trans_model <- gsub(pattern = '\\)', replacement = '', x = mpg_df_sep$trans_model)
+
+mpg_df_sep$trans_type <- as.factor(mpg_df_sep$trans_type)
+mpg_df_sep$trans_model <- as.factor(mpg_df_sep$trans_model)
+```
+
+Dataset `mpg` contains information about particular car models. For more details see the [description][1]. 
+
+#### 1.2 Descriptive statistics 
+
+According to my goals (explore fuel economy based on transmission type) I summarised some descriptive statistics based on transmission type. As the measure of consumption I created new variable `avg_consump` which is simple the average fuel consumption of the cars calculated from the fuel consumption in the city and highways.
+
+```{r Descriptive statistics computing}
+temp_avg <- mpg_df_sep %>% group_by(trans_type) %>%
+    summarise(N = n(),
+              Percent = round((n() / nrow(mpg_df_sep)) * 100, 2),
+              M = mean(avg_consump, na.rm = TRUE),
+              Mod = Modus(avg_consump),
+              VAR = var(avg_consump, na.rm = TRUE),
+              SD = sd(avg_consump, na.rm = TRUE),
+              Q25 = quantile(avg_consump, 0.25),
+              Md = median(avg_consump, na.rm = TRUE),
+              Q75 = quantile(avg_consump, 0.75))
+```
+
+Following table represents the descriptive statistics of the average fuel consumption. 
+
+_Table 1: Descriptive statistics of fuel consumption in city (particular for type of transmission)_
+`r knitr::kable(x = temp_avg, format = 'markdown', digits = 2, align = c('l', 'c', rep('r', 9)))`
+_N - counts; M - mean; Mod - modus; VAR - variance; SD - standard deviation; Q25/75 - quantiles; Md - median_ 
+
+Now we can summarise some characteristics of the data: 
+
+* there are two main types of transmission 
+    1. auto
+    2. manual
+* there are also particular models of transmission, specifically 10 models 
+    - 8 for auto transmission
+    - 2 for manual transmission
+* the most numerous models of transmission are __l4 model (auto)__ with 83 observations and __m5 model (manual)__ with 58 observations
+    - I did not include the feature of particular model of transmission in my analysis
+
+### 2. Model exploration
+
+In this section I am focusing on the presenting the most appropriate model according to the task. I will also include the way of finding that model. 
+
+#### 2.1 Consumption in the city, highways and the average consumption
+
+```{r 2.1 Consumption examination }
+yl <- 'Counts'      ## y label for the histograms
+ylimit <- c(0, 50)  ## y axis limit for the histograms
+
+par(mfrow = c(2,3)) ## arrangement of the plots 
+
+## plots 
+plot(mpg_df_sep$cty, main = 'Consumption in the city', ylab = 'City consumption (miles/gallon)')
+abline(h = mean(mpg_df_sep$cty), col = 'gray')
+
+plot(mpg_df_sep$hwy, main = 'Consumption in the highways', ylab = 'Highways consumption (miles/gallon)')
+abline(h = mean(mpg_df_sep$hwy), col = 'gray')
+
+plot(mpg_df_sep$avg_consump, main = 'AVERAGE consumption', ylab = 'AVERAGE consumption (miles/gallon)')
+abline(h = mean(mpg_df_sep$avg_consump), col = 'gray')
+
+## histograms 
+plot_hist(x = mpg_df_sep$cty, tit = 'Distribution of the consumption\nin city', br = 10, yl = yl,
+          ylimit = ylimit, xl = 'Consumption in the city')
+
+plot_hist(x = mpg_df_sep$hwy, tit = 'Distribution of the consumption\nin highways', yl = yl, br = 12, 
+          ylimit = ylimit,xl = 'Consumption in the highways')
+
+plot_hist(x = mpg_df_sep$avg_consump, tit = 'Distribution of the AVERAGE consumption', yl = yl, br = 12,
+          ylimit = ylimit,xl = 'Average consumption')
+```
+
+```{r reset param 1, include=FALSE}
+dev.off()
+```
+
+Summary of the plots:
+
+* horizontal gray colored lines are mean ($\bar x$) of the particular consumption 
+* in the upper right corner are possible outliers (approx 3)
+    - we can see it in the plots in the first row for all types of consumption (less obvious for the city consumption)
+    - these possible outliers are visible in the histograms as well (right hand side)
+
+#### 2.2 Transmission "type" vs. transmission "model"
+
+```{r 2.2 Plots for transmission, fig.height = 5, fig.width = 8}
+par(mfrow = c(2,3))
+
+with( mpg_df_sep, plot_tran(dat = mpg_df_sep, group = trans_type, y = cty, 
+                            tit = 'Consumption in the city\n(miles/gallon)', 
+                            xl = 'transmission type', 
+                            yl = 'City consumption (mil/gal)'))
+
+with( mpg_df_sep, plot_tran(dat = mpg_df_sep, group = trans_type, y = hwy, 
+                            tit = 'Consumption in the highways\n(miles/gallon)', 
+                            xl = 'transmission type', 
+                            yl = 'Highways consumption (mil/gal)'))
+
+with( mpg_df_sep, plot_tran(dat = mpg_df_sep, group = trans_type, y = avg_consump, 
+                            tit = 'AVERAGE consumption\n(miles/gallon)', 
+                            xl = 'transmission type', 
+                            yl = 'Average consumption (mil/gal)'))
+
+with( mpg_df_sep, plot_tran(dat = mpg_df_sep, group = trans_model, y = cty, 
+                            tit = 'Consumption in the city\n(miles/gallon)', 
+                            xl = 'transmission model', 
+                            yl = 'City consumption (mil/gal)'))
+
+with( mpg_df_sep, plot_tran(dat = mpg_df_sep, group = trans_model, y = hwy, 
+                            tit = 'Consumption in the highways\n(miles/gallon)', 
+                            xl = 'transmission model', 
+                            yl = 'Highways consumption (mil/gal)'))
+
+with( mpg_df_sep, plot_tran(dat = mpg_df_sep, group = trans_model, y = avg_consump, 
+                            tit = 'AVERAGE consumption\n(miles/gallon)', 
+                            xl = 'transmission model', 
+                            yl = 'Average consumption (mil/gal)'))
+```
+
+```{r reset param 2, include=FALSE}
+dev.off()
+```
+
+Statistical model with particular model of transmission is better in terms of variation explained (higher adjusted $R^2$). We can claim that some models differ from others but there is no such model wich is significantly different from __ALL__ the others.[^2]
+
+However, I focus more on the parsimony and interpretability of the model. Therefore I prefer model with _transmission type_ categorical variable (represents auto and manual transmission).
+
+#### 2.3 Covariates of the model 
+
+Except some other categorical features we have also information about the engine displacement - `displ` - (in liters). 
+
+Note that engine displacement is measured in liters and consumption in miles/gallon. In this case it is not neccessary to convert in the same units according to what the [displacement is](https://en.wikipedia.org/wiki/Engine_displacement).
+
+```{r 2.3 Relationship of the consumption and displacement, fig.height = 4, fig.width = 9}
+temp_fit1 <- lm(formula = cty ~ displ, data = mpg_df_sep)
+temp_fit2 <- lm(formula = hwy ~ displ, data = mpg_df_sep)
+temp_fit3 <- lm(formula = avg_consump ~ displ, data = mpg_df_sep)
+
+
+par(mfrow = c(1,3))
+
+## temp_fit1 plot
+with(mpg_df_sep, plot(x = displ, y= cty, frame.plot = FALSE, 
+                      main = 'Displacement of the engine\nand the consumption in the city', 
+                      xlab = 'Consumption in the city (mil/gal)',
+                      ylab = 'Displacement of the engine (l)'))
+abline(temp_fit1, lty = 3)
+
+rp <- plot_legend(temp_fit1)
+legend('topright', legend = rp, bty = 'n')
+
+## temp_fit2 plot
+with(mpg_df_sep, plot(x = displ, y= hwy, frame.plot = FALSE, 
+                      main = 'Displacement of the engine\nand the consumption in the highways', 
+                      xlab = 'Consumption in the highways (mil/gal)',
+                      ylab = 'Displacement of the engine (l)'))
+abline(temp_fit2, lty = 3)
+
+rp <- plot_legend(temp_fit2)
+legend('topright', legend = rp, bty = 'n')
+
+## temp_fit12plot
+with(mpg_df_sep, plot(x = displ, y= avg_consump, frame.plot = FALSE, 
+                      main = 'Displacement of the engine\nand the AVERAGE consumption', 
+                      xlab = 'AVERAGE consumption (mil/gal)',
+                      ylab = 'Displacement of the engine (l)'))
+abline(temp_fit3, lty = 3)
+
+rp <- plot_legend(temp_fit3)
+legend('topright', legend = rp, bty = 'n')
+```
+
+```{r reset param 3, include=FALSE}
+dev.off()
+```
+
+### 3. Final model
+
+I consider following model to test if it is the best one[^3]:
+
+$$Y_i = \beta^{(0)} X^{(0)}_i + \beta^{(1)} X^{(1)}_i + \beta^{(2)} X^{(2)}_i + \beta^{(3)} X^{(3)}_i$$
+
+where 
+
+* $Y_i$ - refers to average consumption of the i^th^ car
+* $X^{(0)}_i$ equals to vector of $1$s 
+* $X^{(1)}_i$ and $X^{(2)}_i$ refer to dummy variable of the transmission type
+    - So when the \observation~j~ (car) has auto type of transmission, 
+        + $X^{(1) - auto}_j$ = 1 
+        + $X^{(2) - manual}_j$ = 0
+
+We know from the definition of the intercept term:
+
+"_The intercept term refers to expected value of the response when the predictor(s) is zero_"
+
+In our case it is useless to think like "_what consumption would have a car with zero engine displacement..._". Therefore I centered the `displ` variable. After that our intercept will be interpretable as "_the expected consumption of the car with average engine displacement and particular type of transmission_". 
+
+For simplicity we can omit $X^{0}$ vector of $1$s and the final equation of the model will be:
+
+$$Y_i = \beta^{(0)} + \beta^{(1)} X^{(1)}_i + \beta^{(2)} X^{(2)}_i + \beta^{(3)} X^{(3)}_i$$.
+
+As the predictor I choosed the average consumption of the cars which was computed as the average consumption in the city and highways. 
+
+The regressors in this model was:
+
+* _displacement_ of the engine
+* type of the car's _transmission_ 
+
+
+```{r 3. Final model}
+fit_final <- lm(formula = avg_consump ~ I(displ - mean(displ)) + trans_type, data = mpg_df_sep)
+
+fin_outliers <- c(28, 222, 26, 213)
+new_mpg <- mpg_df_sep[!(1:nrow(mpg_df_sep) %in% fin_outliers), ]
+```
+
+#### 3.1. Diagnostic of the model 
+
+R provides several opportunities for the diagnostic of the model. Firstly, let's look at the basic plots of the residuals diagnostic.
+
+```{r 3.1 Resid plot, fig.height = 5, fig.width = 8}
+par(mfrow = c(2,2))
+plot(fit_final)
+```
+
+```{r param reset 4, include=FALSE}
+dev.off()
+```
+
+And now we can see some samples which can have the most overall influence. I used the `cooks.distance` function in R which checks for influence in the coefficients as a collective.
+
+```{r 3.1 Influence measure}
+head(sort(cooks.distance(fit_final), decreasing = TRUE), 10)
+```
+
+Summary of the residual diagnostic:
+
+* As I mentioned above there are several observations which can potentially influence the model
+* There is no obvious pattern between residuals and fitted values 
+* Residuals are approx normal distributed
+* I used the `cooks.distance` function for identify particular influenced measures
+    - They were excluded from the model 
+    - The excluded samples from the analysis were indexed:
+        + __28, 222, 26, 213__
+    - I used some kind of _"rule of thumb"_ and exclude the samples with influence >= 0.1 measured by `cook.distance` function 
+    
+```{r 3 final model comparison}
+fit_final_new <- lm(formula = avg_consump ~ I(displ - mean(displ)) + trans_type, data = new_mpg)
+fit_final_new_disp <- lm(formula = avg_consump ~ I(displ - mean(displ)), data = new_mpg)
+
+res_1 <- as.data.frame(summary(fit_final)$coef)
+res_2 <- as.data.frame(summary(fit_final_new)$coef)
+res_3 <- as.data.frame(summary(fit_final_new_disp)$coef)
+
+row.names(res_3) <- c('Intercept', 'Average displacement')
+colnames(res_3)[4] <- c('p value')
+
+fin_aic <- c(AIC(fit_final), AIC(fit_final_new), AIC(fit_final_new_disp))
+fin_bic <- c(BIC(fit_final), BIC(fit_final_new), BIC(fit_final_new_disp))
+fin_r2 <- c(summary(fit_final)$adj.r.squared, summary(fit_final_new)$adj.r.squared, 
+            summary(fit_final_new_disp)$adj.r.squared)
+
+compare_models <- data.frame(Adj_R_squared = fin_r2,
+                             AIC = fin_aic,
+                             BIC = fin_bic)
+rownames(compare_models) <- c('Model_1', 'Model_2', 'Model_3')
+```
+
+In the following table are the characteristics of three models. 
+
+* Model_1 - the model before excluding the influenced measures (with outliers)
+    - $Avg consump = \beta^{(0)} + \beta^{(1)} displ + \beta^{(2)} trans type$
+* Model_2 - the model after excluding the influenced measures (without outliers)
+    - $Avg consump = \beta^{(0)} + \beta^{(1)} displ + \beta^{(2)} trans type$
+* Model_3 - the model excluded transmission type (only engine displacement as the regressor)
+    - $Avg consump = \beta^{(0)} + \beta^{(1)} displ$
+
+_Table 2: The comparisons of the model with and without outliers_ 
+`r knitr::kable(x = compare_models, format = 'markdown', digits = 3, row.names = TRUE, align = 'r')`
+_AIC - Akaike's Information Criterion; BIC - Bayesian Information Criterion_
+
+We can claims based on the characteristics presented in the table that the __Model_3__ is the most appropriate. It has the highest adjusted R squared[^4], and the best [Akaike's and Bayesian Information Criteria][2]. 
+
+Finally, I present the table with coefficients of the final model after excluding influenced measures. 
+
+_Table 3: The coeficients of the final model_ 
+`r knitr::kable(x = res_3, format = 'markdown', digits = 3, row.names = TRUE, align = 'r')`
+
+We can see that the _intercept_ of the model is `r paste(round(summary(fit_final_new_disp)$coef[1], 2))`. 
+Thus, that is the estimated consumption of the car with average engine displacement (remember that we centralized this variable).
+
+The estimated _slope_ is `r paste(round(summary(fit_final_new_disp)$coef[2], 2))`. We can interpret it as _"the estimated change in the average consumption in miles per gallon for a 1 liter change of the engine displacement"_.  
+
+## Summary
+
+* Presented final model explain approx 68 % of the variance
+    - We can explain approx 68 of the variance in the average consumption of the observed cars by considering engine displacement 
+* We can conclude that after excluding the influenced measures the best model include only one predictor - engine displacement
+    - adding transmission type as regressor is redundant 
+* If we disregard the displacement engine and compare only the transmission types, there is significant differnce in average consumption between auto and manual transmission (t = - 4.18, df = 147, p < 0.001) - calculated from the new dataset (without influenced measures)
+* Presented model may not necessarily be the right one 
+
+
+# References
+
+1. http://docs.ggplot2.org/current/mpg.html
+2. http://www.academicjournals.org/article/article1379662949_Acquah.pdf
+
+[1]: http://docs.ggplot2.org/current/mpg.html
+[2]: http://www.academicjournals.org/article/article1379662949_Acquah.pdf
+
+
+[^1]: https://www.coursera.org/learn/regression-models
+[^2]: Note: In R `lm()` models when we consider factor variable as a predictor, in result compares all levels of factor variable to reference level (using the t-test). I tried all possible levels of `trans_model` variabel (model of transmission) to see if there is some significantly differ from the others. In summary I decided to stay in the intial reference level of transmission model.
+[^3]: Note that I use different notation as in the Reg Mod course. The upper index ($X^{(index)}$) refers to __feature__ index, the lower refers to ($X_{index}$) to index of __observation__. 
+[^4]: The reason of higher adjusted R squared (or just R squared in this case, because the Model 3 has only one predictor) is that adjusted R squared 'penalizes' including more predictors (in the Model 2 was 2 predictors).
